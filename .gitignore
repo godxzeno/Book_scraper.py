@@ -1,5 +1,118 @@
-# Object file
-*.o
+"""
+Book Store Scraper
+-------------------
+Scrapes book listings (title, price, rating, availability) from
+books.toscrape.com and saves the results to a clean CSV file.
 
-# Ada Library Information
-*.ali
+Handles multiple pages automatically (pagination), so it can pull
+data from an entire catalog, not just one page.
+
+Author: [Your Name]
+"""
+
+import requests
+from bs4 import BeautifulSoup
+import csv
+import time
+
+
+BASE_URL = "https://books.toscrape.com/catalogue/page-{}.html"
+
+# Star ratings on this site are written as words in the HTML class name
+# e.g. class="star-rating Three" -> we convert that to a number
+RATING_MAP = {
+    "One": 1,
+    "Two": 2,
+    "Three": 3,
+    "Four": 4,
+    "Five": 5,
+}
+
+
+def get_page(page_number):
+    """Fetch a single page and return a BeautifulSoup object, or None if it fails."""
+    url = BASE_URL.format(page_number)
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200:
+            return None
+        return BeautifulSoup(response.text, "html.parser")
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching page {page_number}: {e}")
+        return None
+
+
+def extract_books(soup):
+    """Pull book details out of a page's HTML and return them as a list of dicts."""
+    books = []
+    listings = soup.find_all("article", class_="product_pod")
+
+    for item in listings:
+        title = item.h3.a["title"]
+
+        price_text = item.find("p", class_="price_color").text
+        price = price_text.replace("£", "").strip()
+
+        availability = item.find("p", class_="instock availability").text.strip()
+
+        rating_class = item.find("p", class_="star-rating")["class"]
+        # class list looks like ['star-rating', 'Three'] -> take the word part
+        rating_word = rating_class[1]
+        rating = RATING_MAP.get(rating_word, "Unknown")
+
+        books.append({
+            "title": title,
+            "price_gbp": price,
+            "availability": availability,
+            "rating_out_of_5": rating,
+        })
+
+    return books
+
+
+def scrape_all_pages(max_pages=5):
+    """Loop through pages until we run out of pages or hit max_pages."""
+    all_books = []
+    page = 1
+
+    while page <= max_pages:
+        print(f"Scraping page {page}...")
+        soup = get_page(page)
+
+        if soup is None:
+            print("No more pages found. Stopping.")
+            break
+
+        books = extract_books(soup)
+        if not books:
+            break
+
+        all_books.extend(books)
+        page += 1
+        time.sleep(1)  # small delay so we don't hammer the server
+
+    return all_books
+
+
+def save_to_csv(books, filename="books_data.csv"):
+    """Save the scraped book data to a CSV file."""
+    if not books:
+        print("Nothing to save.")
+        return
+
+    with open(filename, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=books[0].keys())
+        writer.writeheader()
+        writer.writerows(books)
+
+    print(f"Saved {len(books)} books to {filename}")
+
+
+if __name__ == "__main__":
+    print("Starting Book Store Scraper...\n")
+
+    results = scrape_all_pages(max_pages=5)
+    save_to_csv(results)
+
+    print(f"\nDone! Scraped {len(results)} books total.")
+
